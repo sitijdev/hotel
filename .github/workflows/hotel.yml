@@ -10,6 +10,9 @@ jobs:
   convert:
     # Menentukan environment untuk menjalankan job. 'ubuntu-latest' adalah pilihan yang stabil.
     runs-on: ubuntu-latest
+    # --- PENTING: Memberikan izin tulis untuk konten repositori ---
+    permissions:
+      contents: write # Memberikan izin tulis untuk konten repositori
 
     # Langkah-langkah (steps) yang akan dijalankan secara berurutan.
     steps:
@@ -19,6 +22,12 @@ jobs:
       with:
         # 'fetch-depth: 0' penting untuk Git LFS agar dapat bekerja dengan riwayat penuh file.
         fetch-depth: 0
+
+    # --- PENTING: Mengatur identitas penulis Git sebelum commit ---
+    - name: Set Git user identity
+      run: |
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git config user.name "github-actions[bot]"
 
     - name: Set up Python
       # Menggunakan action resmi untuk mengatur lingkungan Python.
@@ -128,6 +137,8 @@ jobs:
       # Git LFS akan secara otomatis mencegat file 'hotel.json' karena sudah dilacak sebelumnya.
       # '|| echo "Tidak ada perubahan untuk di-commit"' mencegah error jika tidak ada perubahan pada file.
       run: |
+        # Path file yang benar di runner adalah `/home/runner/work/nama_repo/nama_repo/file.json`
+        # atau lebih umum `${{ github.workspace }}/file.json`
         git add ${{ github.workspace }}/hotel.json
         git commit -m "Update hotel.json from latest CSV" || echo "Tidak ada perubahan untuk di-commit"
 
@@ -136,6 +147,6 @@ jobs:
       uses: ad-m/github-push-action@master
       with:
         # 'GITHUB_TOKEN' adalah token akses otomatis yang disediakan oleh GitHub Actions.
-        github_token: ${{ secrets.GITHUB_TOKEN }}
+        github_token: ${{ secrets.TOKEN }}
         # Menentukan branch tujuan. Pastikan sesuai dengan branch utama repositori Anda.
         branch: main
