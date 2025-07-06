@@ -1,0 +1,104 @@
+name: Convert CSV to JSON (Manual Trigger)
+
+on:
+  workflow_dispatch: # Memungkinkan eksekusi manual dari GitHub Actions tab
+
+jobs:
+  convert:
+    runs-on: ubuntu-latest # Gunakan runner Linux terbaru
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0 # Penting untuk Git LFS agar bisa mengelola file besar
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.x' # Gunakan versi Python terbaru yang stabil
+
+    - name: Install dependencies
+      run: pip install requests pandas # requests untuk mengunduh, pandas untuk konversi CSV
+
+    - name: Download CSV and Convert to JSON
+      run: |
+        # Definisi nama file dan URL
+        CSV_URL="https://trip.lareward.com/hotel.csv"
+        CSV_FILE="hotel.csv"
+        JSON_FILE="hotel.json"
+
+        echo "Mulai mengunduh file CSV dari $CSV_URL..."
+        # Mengunduh file CSV. -L mengikuti redirect, -o menyimpan ke file, --progress-bar menunjukkan progres.
+        curl -L $CSV_URL -o $CSV_FILE --progress-bar
+
+        if [ ! -f "$CSV_FILE" ]; then
+          echo "Error: File CSV gagal diunduh atau tidak ditemukan."
+          exit 1
+        fi
+        echo "Unduh CSV selesai. Ukuran: $(du -sh $CSV_FILE | awk '{print $1}')"
+
+        echo "Memulai konversi CSV ke JSON..."
+        # Menjalankan skrip Python untuk konversi
+        python -c "
+import pandas as pd
+import json
+import os
+
+csv_file = '$CSV_FILE'
+json_file = '$JSON_FILE'
+chunksize = 25000 # Ukuran chunk. Sesuaikan untuk keseimbangan memori dan performa.
+                  # Jika runner kehabisan memori, kurangi nilai ini.
+
+# Inisialisasi file JSON dengan array kosong
+with open(json_file, 'w', encoding='utf-8') as f:
+    f.write('[\n')
+
+first_chunk_record = True # Flag untuk menangani koma antar objek JSON
+
+# Membaca CSV dalam chunks
+# dtype=str penting untuk mencegah pandas salah menginterpretasikan tipe data (e.g., '0' vs 0.0)
+for i, chunk in enumerate(pd.read_csv(csv_file, chunksize=chunksize, dtype=str)):
+    print(f'  Memproses chunk {i+1} dengan {len(chunk)} baris...')
+    
+    # Mengisi nilai NaN (Not a Number) dengan None agar menjadi 'null' di JSON,
+    # karena NaN tidak valid dalam JSON.
+    records = chunk.where(pd.notna(chunk), None).to_dict(orient='records')
+    
+    with open(json_file, 'a', encoding='utf-8') as f:
+        for j, record in enumerate(records):
+            if not first_chunk_record:
+                f.write(',\n') # Tambahkan koma sebelum setiap objek kecuali yang pertama secara keseluruhan
+            json.dump(record, f, ensure_ascii=False, indent=2) # indent untuk keterbacaan
+            first_chunk_record = False
+
+# Tutup array JSON
+with open(json_file, 'a', encoding='utf-8') as f:
+    f.write('\n]\n')
+
+print('Konversi selesai!')
+print(f'Ukuran file JSON yang dihasilkan: {os.path.getsize(json_file) / (1024 * 1024):.2f} MB')
+"
+        if [ ! -f "$JSON_FILE" ]; then
+          echo "Error: File JSON tidak berhasil dibuat."
+          exit 1
+        fi
+
+    - name: Konfigurasi Git LFS
+      run: |
+        # Memastikan Git LFS dikonfigurasi di lingkungan runner
+        git config lfs.url "https://github.com/${{ github.repository }}.git/info/lfs"
+        git lfs install --local
+
+    - name: Add dan Commit File JSON
+      run: |
+        # Tambahkan file JSON. Git LFS akan secara otomatis menangani file besar.
+        git add ${{ github.workspace }}/hotel.json
+        # Commit perubahan. '|| echo "No changes to commit"' mencegah error jika tidak ada perubahan.
+        git commit -m "Update hotel.json from latest CSV" || echo "Tidak ada perubahan untuk di-commit"
+
+    - name: Push Perubahan ke Repositori
+      uses: ad-m/github-push-action@master
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }} # Token otomatis disediakan oleh GitHub Actions
+        branch: main # Sesuaikan dengan nama branch utama Anda (misal: 'main' atau 'master')
