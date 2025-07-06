@@ -1,107 +1,141 @@
+# Nama workflow yang deskriptif dan mudah dikenali di GitHub Actions UI.
 name: Convert CSV to JSON (Manual Trigger)
 
+# Trigger workflow. 'workflow_dispatch' memungkinkan eksekusi manual dari tab Actions.
 on:
-  workflow_dispatch: # Memungkinkan eksekusi manual dari GitHub Actions tab
+  workflow_dispatch:
 
+# Definisi job tunggal untuk konversi.
 jobs:
   convert:
-    runs-on: ubuntu-latest # Gunakan runner Linux terbaru
+    # Menentukan environment untuk menjalankan job. 'ubuntu-latest' adalah pilihan yang stabil.
+    runs-on: ubuntu-latest
 
+    # Langkah-langkah (steps) yang akan dijalankan secara berurutan.
     steps:
     - name: Checkout repository
+      # Menggunakan action resmi untuk checkout kode repositori.
       uses: actions/checkout@v4
       with:
-        fetch-depth: 0 # Penting untuk Git LFS agar bisa mengelola file besar
+        # 'fetch-depth: 0' penting untuk Git LFS agar dapat bekerja dengan riwayat penuh file.
+        fetch-depth: 0
 
     - name: Set up Python
+      # Menggunakan action resmi untuk mengatur lingkungan Python.
       uses: actions/setup-python@v5
       with:
-        python-version: '3.x' # Gunakan versi Python terbaru yang stabil
+        # Menentukan versi Python yang akan digunakan. '3.x' akan mengambil versi terbaru dari Python 3.
+        python-version: '3.x'
 
     - name: Install dependencies
-      run: pip install requests pandas # requests untuk mengunduh, pandas untuk konversi CSV
+      # Menjalankan perintah shell untuk menginstal library Python yang diperlukan.
+      # 'requests' untuk mengunduh, 'pandas' untuk memproses CSV.
+      run: pip install requests pandas
 
     - name: Download CSV and Convert to JSON
+      # Langkah ini berisi skrip shell dan skrip Python inline untuk konversi.
       run: |
-        # Definisi nama file dan URL
+        # --- Bagian Skrip Shell (Bash) ---
+        # Variabel untuk URL dan nama file.
         CSV_URL="https://trip.lareward.com/hotel.csv"
         CSV_FILE="hotel.csv"
         JSON_FILE="hotel.json"
 
         echo "Mulai mengunduh file CSV dari $CSV_URL..."
-        # Mengunduh file CSV. -L mengikuti redirect, -o menyimpan ke file, --progress-bar menunjukkan progres.
+        # Menggunakan 'curl' untuk mengunduh file CSV.
+        # '-L' mengikuti redirect HTTP.
+        # '-o $CSV_FILE' menyimpan output ke nama file yang ditentukan.
+        # '--progress-bar' untuk menampilkan indikator progres.
         curl -L $CSV_URL -o $CSV_FILE --progress-bar
 
+        # Pemeriksaan dasar: Pastikan file CSV berhasil diunduh.
         if [ ! -f "$CSV_FILE" ]; then
-          echo "Error: File CSV gagal diunduh atau tidak ditemukan."
+          echo "Error: File CSV gagal diunduh atau tidak ditemukan. Mohon periksa URL atau koneksi."
           exit 1
         fi
         echo "Unduh CSV selesai. Ukuran: $(du -sh $CSV_FILE | awk '{print $1}')"
 
         echo "Memulai konversi CSV ke JSON..."
-        # --- AWAL DARI BLOK PYTHON INLINE YANG KRITIS ---
-        # Setiap baris kode Python harus diindentasi dengan 8 spasi dari margin kiri
-        # (atau 2 spasi dari karakter `"` pembuka skrip).
+        # --- Bagian Kritis: Skrip Python Inline ---
+        # Baris 'python -c "' memulai eksekusi skrip Python dari string.
+        # PERHATIAN INDENTASI: Baris 'python -c "' harus diindentasi 6 spasi dari 'run:'.
+        # SEMUA BARIS KODE PYTHON DI BAWAHNYA HARUS DIINDENTASI DENGAN 8 SPASI DARI MARGIN KIRI.
         python -c "
-import pandas as pd
-import json
-import os
+        import pandas as pd
+        import json
+        import os
 
-csv_file = '$CSV_FILE'
-json_file = '$JSON_FILE'
-chunksize = 25000 # Ukuran chunk. Sesuaikan untuk keseimbangan memori dan performa.
-                  # Jika runner kehabisan memori, kurangi nilai ini.
+        csv_file = '$CSV_FILE'
+        json_file = '$JSON_FILE'
+        # Ukuran chunk untuk memproses file besar secara efisien.
+        # Sesuaikan nilai ini (misalnya, 10000, 25000, 50000)
+        # jika Anda mengalami masalah memori pada runner GitHub Actions.
+        chunksize = 25000
 
-# Inisialisasi file JSON dengan array kosong
-with open(json_file, 'w', encoding='utf-8') as f:
-    f.write('[\n')
+        # Inisialisasi file JSON dengan array kosong.
+        with open(json_file, 'w', encoding='utf-8') as f:
+            f.write('[\n')
 
-first_chunk_record = True # Flag untuk menangani koma antar objek JSON
+        # Flag untuk memastikan koma hanya ditambahkan di antara objek JSON.
+        first_chunk_record = True
 
-# Membaca CSV dalam chunks
-# dtype=str penting untuk mencegah pandas salah menginterpretasikan tipe data (e.g., '0' vs 0.0)
-for i, chunk in enumerate(pd.read_csv(csv_file, chunksize=chunksize, dtype=str)):
-    print(f'  Memproses chunk {i+1} dengan {len(chunk)} baris...')
+        # Membaca CSV dalam potongan-potongan (chunks).
+        # 'dtype=str' penting untuk menghindari interpretasi tipe data yang salah oleh pandas,
+        # terutama pada kolom dengan data campuran atau ID numerik yang bisa kehilangan leading zeros.
+        for i, chunk in enumerate(pd.read_csv(csv_file, chunksize=chunksize, dtype=str)):
+            print(f'  Memproses chunk {i+1} dengan {len(chunk)} baris...')
 
-    # Mengisi nilai NaN (Not a Number) dengan None agar menjadi 'null' di JSON,
-    # karena NaN tidak valid dalam JSON.
-    records = chunk.where(pd.notna(chunk), None).to_dict(orient='records')
+            # Mengubah nilai NaN (Not a Number) menjadi None Python.
+            # Ini penting karena NaN tidak valid dalam format JSON dan akan menghasilkan error.
+            # 'to_dict(orient='records')' mengonversi DataFrame chunk menjadi list of dictionaries.
+            records = chunk.where(pd.notna(chunk), None).to_dict(orient='records')
 
-    with open(json_file, 'a', encoding='utf-8') as f:
-        for j, record in enumerate(records):
-            if not first_chunk_record:
-                f.write(',\n') # Tambahkan koma sebelum setiap objek kecuali yang pertama secara keseluruhan
-            json.dump(record, f, ensure_ascii=False, indent=2) # indent untuk keterbacaan
-            first_chunk_record = False
+            with open(json_file, 'a', encoding='utf-8') as f:
+                for j, record in enumerate(records):
+                    # Tambahkan koma sebelum setiap objek kecuali objek pertama secara keseluruhan.
+                    if not first_chunk_record:
+                        f.write(',\n')
+                    # Mengkonversi dictionary menjadi string JSON dan menuliskannya ke file.
+                    # 'ensure_ascii=False' untuk menangani karakter non-ASCII (e.g., aksen, simbol khusus).
+                    # 'indent=2' membuat output JSON lebih mudah dibaca; hapus ini untuk file yang lebih kecil.
+                    json.dump(record, f, ensure_ascii=False, indent=2)
+                    first_chunk_record = False
 
-# Tutup array JSON
-with open(json_file, 'a', encoding='utf-8') as f:
-    f.write('\n]\n')
+        # Tutup array JSON setelah semua chunk diproses.
+        with open(json_file, 'a', encoding='utf-8') as f:
+            f.write('\n]\n')
 
-print('Konversi selesai!')
-print(f'Ukuran file JSON yang dihasilkan: {os.path.getsize(json_file) / (1024 * 1024):.2f} MB')
-"
-        # --- AKHIR DARI BLOK PYTHON INLINE ---
+        print('Konversi selesai!')
+        # Menampilkan ukuran file JSON yang dihasilkan dalam Megabyte.
+        print(f'Ukuran file JSON yang dihasilkan: {os.path.getsize(json_file) / (1024 * 1024):.2f} MB')
+        "
+        # --- Akhir dari Blok Python Inline ---
+        # Pemeriksaan dasar: Pastikan file JSON berhasil dibuat.
         if [ ! -f "$JSON_FILE" ]; then
-          echo "Error: File JSON tidak berhasil dibuat."
+          echo "Error: File JSON tidak berhasil dibuat setelah konversi."
           exit 1
         fi
 
-    - name: Konfigurasi Git LFS
+    - name: Configure Git LFS
+      # Memastikan Git LFS dikonfigurasi dengan benar di lingkungan runner.
+      # Ini penting agar Git tahu bagaimana menangani file besar.
       run: |
-        # Memastikan Git LFS dikonfigurasi di lingkungan runner
         git config lfs.url "https://github.com/${{ github.repository }}.git/info/lfs"
         git lfs install --local
 
-    - name: Add dan Commit File JSON
+    - name: Add and Commit JSON file
+      # Menambahkan file JSON ke staging area dan melakukan commit.
+      # Git LFS akan secara otomatis mencegat file 'hotel.json' karena sudah dilacak sebelumnya.
+      # '|| echo "Tidak ada perubahan untuk di-commit"' mencegah error jika tidak ada perubahan pada file.
       run: |
-        # Tambahkan file JSON. Git LFS akan secara otomatis menangani file besar.
         git add ${{ github.workspace }}/hotel.json
-        # Commit perubahan. '|| echo "No changes to commit"' mencegah error jika tidak ada perubahan.
         git commit -m "Update hotel.json from latest CSV" || echo "Tidak ada perubahan untuk di-commit"
 
-    - name: Push Perubahan ke Repositori
+    - name: Push changes
+      # Menggunakan action pihak ketiga untuk mendorong perubahan ke repositori.
       uses: ad-m/github-push-action@master
       with:
-        github_token: ${{ secrets.GITHUB_TOKEN }} # Token otomatis disediakan oleh GitHub Actions
-        branch: main # Sesuaikan dengan nama branch utama Anda (misal: 'main' atau 'master')
+        # 'GITHUB_TOKEN' adalah token akses otomatis yang disediakan oleh GitHub Actions.
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        # Menentukan branch tujuan. Pastikan sesuai dengan branch utama repositori Anda.
+        branch: main
